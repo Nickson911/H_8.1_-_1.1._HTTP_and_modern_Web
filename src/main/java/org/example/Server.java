@@ -3,6 +3,7 @@ package org.example;
 import java.io.*;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.URISyntaxException;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -19,20 +20,6 @@ public class Server {
         this.handlers = new ConcurrentHashMap<>();
     }
 
-    private final Handler notFound = (request, out) -> {
-        try {
-            out.write((
-                    "HTTP/1.1 404 Not Found\r\n" +
-                            "Content-Length: 0\r\n" +
-                            "Connection: close\r\n" +
-                            "\r\n"
-            ).getBytes());
-            out.flush();
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-    };
-
     public void start() {
         try (final var serverSocket = new ServerSocket(port)) {
             while (true) {
@@ -45,9 +32,7 @@ public class Server {
     }
 
     public void addHandler(String method, String path, Handler handler){
-        if (handlers.get(method) == null) {
-            handlers.put(method, new ConcurrentHashMap<>());
-        }
+        handlers.computeIfAbsent(method, k -> new ConcurrentHashMap<>());
         handlers.get(method).put(path, handler);
     }
 
@@ -56,21 +41,24 @@ public class Server {
              final var in = socket.getInputStream();
              final var out = new BufferedOutputStream(socket.getOutputStream());
         ) {
-            final var requestLine = Request.fromInputStream(in);
+            final var requestLine = Request.createRequest(in, out);
+            assert requestLine != null;
             final var paths = handlers.get(requestLine.getMethod());
             if (paths == null) {
-                notFound.handler(requestLine,out);
+                Request.badRequest(out);
                 return;
             }
             final var handler = paths.get(requestLine.getPath());
             if (handler == null) {
-                notFound.handler(requestLine,out);
+                Request.badRequest(out);
                 return;
             }
-            handler.handler(requestLine,out);
+            handler.handle(requestLine,out);
         }
         catch (IOException e) {
             e.printStackTrace();
+        } catch (URISyntaxException e) {
+            throw new RuntimeException(e);
         }
     }
 }
